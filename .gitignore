@@ -5,3 +5,8 @@ __pycache__/
 api_stats.json
 api_usage.log
 cron.log
+
+# 归档目录（不提交）
+usershare/
+daily_report/
+
