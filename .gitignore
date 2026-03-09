@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.swp
+*.log
+api_stats.json
+api_usage.log
+cron.log
