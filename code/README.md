@@ -57,7 +57,7 @@ python3 api_tracker.py today
 
 ## Cron 任务
 ```
-15 0 * * * /home/admin/advances/code/generate_daily_report.sh
+15 0 * * * /root/advances/code/generate_daily_report.sh
 ```
 
 ## 12 个主题

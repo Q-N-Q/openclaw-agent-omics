@@ -104,7 +104,7 @@ Smith, J., & Wang, L. CRISPR-based gene editing in human embryos. Nature (2025).
 
 ```bash
 # 每日凌晨 0:15 生成早报
-15 0 * * * /home/admin/advances/code/generate_daily_report.sh >> /home/admin/advances/code/cron.log 2>&1
+15 0 * * * /root/advances/code/generate_daily_report.sh >> /root/advances/code/cron.log 2>&1
 ```
 
 ## 文件结构
