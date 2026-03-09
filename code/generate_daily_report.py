@@ -15,6 +15,8 @@ import hashlib
 import hmac
 import base64
 import time
+import subprocess
+import urllib.parse
 
 # 配置
 DAILY_REPORT_DIR = Path.home() / "advances" / "daily_report"
@@ -60,6 +62,220 @@ TOPIC_KEYWORDS = {
     "脑科学": ["neuroscience", "neural", "brain"],
     "脑健康": ["Alzheimer", "Parkinson", "neurodegeneration"]
 }
+
+def search_with_searxng(query, max_results=3):
+    """使用 searxng 搜索学术信息"""
+    try:
+        searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8080")
+        search_url = f"{searxng_url}/search?q={urllib.parse.quote(query)}&format=json"
+        result = subprocess.run(["curl", "-s", "-A", "Mozilla/5.0", search_url], 
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                               universal_newlines=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            results = []
+            for r in data.get("results", [])[:max_results]:
+                results.append({
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "content": r.get("content", "")
+                })
+            return results
+    except Exception as e:
+        pass
+    return []
+
+def fetch_paper_info_enhanced(title, doi="", link=""):
+    """增强版：从多源获取完整论文信息"""
+    paper_info = {
+        "title": title,
+        "authors": "",
+        "org": "",
+        "journal": "",
+        "year": "",
+        "doi": doi,
+        "article_url": link,
+        "progress": "",
+        "summary": ""
+    }
+    
+    # 如果 DOI 是 arXiv 格式，直接设置
+    if doi and doi.startswith("arXiv:"):
+        paper_info["journal"] = "arXiv"
+        paper_info["article_url"] = f"https://arxiv.org/abs/{doi.replace('arXiv:', '')}"
+        return paper_info
+    
+    # 1. 优先用 DOI 从 CrossRef 获取
+    if doi and doi.startswith("10."):
+        try:
+            url = f"https://api.crossref.org/works/{doi}"
+            result = subprocess.run(["curl", "-s", "-A", "Mozilla/5.0", url], 
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                   universal_newlines=True, timeout=10)
+            if result.returncode == 0 and result.stdout and len(result.stdout) > 100:
+                try:
+                    data = json.loads(result.stdout)
+                    message = data.get("message", {})
+                    if message and message.get("title"):
+                        paper_info["title"] = message.get("title", [title])[0]
+                        paper_info["authors"] = format_authors(message.get("author", []))
+                        paper_info["journal"] = message.get("container-title", [""])[0] if message.get("container-title") else ""
+                        paper_info["year"] = str(message.get("created", {}).get("date-parts", [[None]])[0][0]) if message.get("created") else ""
+                        paper_info["doi"] = message.get("DOI", doi)
+                        paper_info["article_url"] = message.get("URL", link)
+                        
+                        # 提取机构
+                        affiliations = []
+                        for author in message.get("author", []):
+                            aff = author.get("affiliation", [])
+                            if aff:
+                                affiliations.extend([a.get("name", "") for a in aff])
+                        if affiliations:
+                            paper_info["org"] = affiliations[0]
+                except Exception as e:
+                    pass
+        except Exception as e:
+            pass
+    
+    # 2. 如果信息不全，用标题搜索
+    if not paper_info["authors"] or not paper_info["journal"]:
+        try:
+            search_url = f"https://api.crossref.org/works?query.title={title[:100]}&rows=1"
+            result = subprocess.run(["curl", "-s", "-A", "Mozilla/5.0", search_url], 
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                   universal_newlines=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    data = json.loads(result.stdout)
+                    items = data.get("message", {}).get("items", [])
+                    if items:
+                        item = items[0]
+                        if not paper_info["authors"]:
+                            paper_info["authors"] = format_authors(item.get("author", []))
+                        if not paper_info["journal"]:
+                            paper_info["journal"] = item.get("container-title", [""])[0] if item.get("container-title") else ""
+                        if not paper_info["year"]:
+                            paper_info["year"] = str(item.get("created", {}).get("date-parts", [[None]])[0][0]) if item.get("created") else ""
+                        if not paper_info["doi"]:
+                            paper_info["doi"] = item.get("DOI", "")
+                        if not paper_info["article_url"]:
+                            paper_info["article_url"] = item.get("URL", link)
+                except json.JSONDecodeError:
+                    pass
+        except Exception as e:
+            pass
+    
+    # 3. 尝试从链接提取信息（arXiv 等）
+    if "arxiv.org" in link.lower() and not paper_info["authors"]:
+        try:
+            arxiv_id = link.split("/")[-1]
+            api_url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
+            result = subprocess.run(["curl", "-s", "-A", "Mozilla/5.0", api_url], 
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                   universal_newlines=True, timeout=10)
+            if result.returncode == 0:
+                # 简单解析 arXiv XML
+                if "<title>" in result.stdout:
+                    title_start = result.stdout.find("<title>") + 7
+                    title_end = result.stdout.find("</title>", title_start)
+                    if title_start > 6 and title_end > title_start:
+                        paper_info["title"] = result.stdout[title_start:title_end].strip()
+                
+                if "<author>" in result.stdout:
+                    authors = []
+                    for match in re.finditer(r"<name>([^<]+)</name>", result.stdout):
+                        authors.append(match.group(1))
+                    if authors:
+                        paper_info["authors"] = ", ".join(authors[:10])
+                
+                if "<published>" in result.stdout:
+                    pub_match = re.search(r"<published>(\d{4})-", result.stdout)
+                    if pub_match:
+                        paper_info["year"] = pub_match.group(1)
+        except Exception as e:
+            pass
+    
+    # 4. 如果 CrossRef 失败，从链接提取期刊信息
+    if not paper_info["journal"]:
+        if "nature.com" in link:
+            paper_info["journal"] = "Nature"
+        elif "science.org" in link:
+            paper_info["journal"] = "Science"
+        elif "cell.com" in link:
+            paper_info["journal"] = "Cell"
+        elif "pnas.org" in link:
+            paper_info["journal"] = "PNAS"
+    
+    # 5. 生成进展描述
+    if not paper_info["progress"]:
+        year = paper_info.get('year', '近年')
+        authors = paper_info.get('authors', '研究团队') or '研究团队'
+        journal = paper_info.get('journal', '相关期刊') or '相关期刊'
+        title = paper_info.get('title', title)[:50]
+        paper_info["progress"] = f"该研究发表于{year}，{authors}在{journal}发表论文《{title}...》，报道了最新研究进展。"
+    
+    return paper_info
+
+def fetch_paper_info(title, doi=""):
+    """从 CrossRef/PubMed 获取论文完整信息（兼容旧版）"""
+    try:
+        # 优先用 DOI 搜索
+        if doi:
+            url = f"https://api.crossref.org/works/{doi}"
+            result = subprocess.run(["curl", "-s", "-A", "Mozilla/5.0", url], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    data = json.loads(result.stdout)
+                    message = data.get("message", {})
+                    if message:
+                        return {
+                            "title": message.get("title", [""])[0] if message.get("title") else title,
+                            "authors": format_authors(message.get("author", [])),
+                            "journal": message.get("container-title", [""])[0] if message.get("container-title") else "",
+                            "year": str(message.get("created", {}).get("date-parts", [[None]])[0][0]) if message.get("created") else "",
+                            "doi": message.get("DOI", doi)
+                        }
+                except json.JSONDecodeError:
+                    pass
+        
+        # 用标题搜索
+        search_url = f"https://api.crossref.org/works?query.title={title[:100]}&rows=1"
+        result = subprocess.run(["curl", "-s", "-A", "Mozilla/5.0", search_url], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                data = json.loads(result.stdout)
+                items = data.get("message", {}).get("items", [])
+                if items:
+                    item = items[0]
+                    return {
+                        "title": item.get("title", [""])[0] if item.get("title") else title,
+                        "authors": format_authors(item.get("author", [])),
+                        "journal": item.get("container-title", [""])[0] if item.get("container-title") else "",
+                        "year": str(item.get("created", {}).get("date-parts", [[None]])[0][0]) if item.get("created") else "",
+                        "doi": item.get("DOI", "")
+                    }
+            except json.JSONDecodeError:
+                pass
+    except Exception as e:
+        pass
+    
+    return {"title": title, "authors": "", "journal": "", "year": "", "doi": doi}
+
+def format_authors(authors):
+    """格式化作者列表"""
+    if not authors:
+        return ""
+    formatted = []
+    for author in authors[:10]:
+        given = author.get("given", "")
+        family = author.get("family", "")
+        if given and family:
+            formatted.append(f"{family}, {given[0]}.")
+        elif family:
+            formatted.append(family)
+    if len(formatted) > 1:
+        return ", ".join(formatted[:-1]) + ", & " + formatted[-1]
+    return formatted[0] if formatted else ""
 
 def get_feishu_token():
     """获取飞书 app_access_token"""
@@ -196,12 +412,53 @@ def generate_report():
         if e["title"] in history:
             continue
         
+        # 提取 DOI（增强版：支持多种格式）
+        link = e.get("link", "")
+        summary = e.get("summary", "")
+        doi = ""
+        
+        # 1. 尝试标准 DOI 格式
+        doi_match = re.search(r"10\.\d{4,}/[\w\-\.]+", summary + " " + link)
+        if doi_match:
+            doi = doi_match.group(0)
+        
+        # 2. 尝试从 Nature 链接提取
+        if not doi and "nature.com/articles/" in link:
+            nature_match = re.search(r"/articles/(s?\d{4,}[\w\-\.]+)", link)
+            if nature_match:
+                article_id = nature_match.group(1)
+                if article_id.startswith('s'):
+                    doi = f"10.1038/{article_id}"
+                else:
+                    doi = f"10.1038/s{article_id}"
+        
+        # 3. 尝试从 Science 链接提取
+        if not doi and "science.org/doi/" in link:
+            science_match = re.search(r"/doi/(10\.\d{4,}/[\w\-\.]+)", link)
+            if science_match:
+                doi = science_match.group(1)
+        
+        # 4. 尝试从 arXiv 链接提取
+        if not doi and "arxiv.org/abs/" in link:
+            arxiv_match = re.search(r"/abs/([\d\.]+)", link)
+            if arxiv_match:
+                doi = f"arXiv:{arxiv_match.group(1)}"
+        
+        # 获取完整论文信息（增强版）
+        paper_info = fetch_paper_info_enhanced(e["title"], doi, e["link"])
+        
         org = extract_org(e["summary"])
         categorized[topic].append({
-            "title": e["title"],
+            "title": paper_info.get("title", e["title"]),
+            "authors": paper_info.get("authors", ""),
+            "org": paper_info.get("org", org),
+            "journal": paper_info.get("journal", ""),
+            "year": paper_info.get("year", ""),
+            "doi": paper_info.get("doi", doi),
+            "article_url": paper_info.get("article_url", e["link"]),
+            "progress": paper_info.get("progress", ""),
             "link": e["link"],
-            "org": org,
-            "summary": e["summary"][:80]
+            "summary": e["summary"][:200]
         })
     
     # 生成内容
@@ -215,8 +472,28 @@ def generate_report():
             continue
         report += f"## {topic}\n\n"
         for item in items:
-            report += f"- [{item['org']}] {item['summary']}...  \n"
-            report += f"  **[{item['title'][:60]}]({item['link']})**\n\n"
+            # 生成 APA/Nature 引用格式
+            citation = ""
+            if item.get("authors") and item.get("title") and item.get("journal"):
+                citation = f"{item.get('authors', '')}. {item.get('title', '')}. {item.get('journal', '')} ({item.get('year', 'n.d.')})."
+                if item.get("doi"):
+                    citation += f" https://doi.org/{item.get('doi', '')}"
+            
+            report += f"- **{item.get('org', '研究机构')}**\n"
+            report += f"  - **论文标题**: [{item.get('title', 'Unknown')[:80]}]({item.get('article_url', item.get('link', '#'))})\n"
+            report += f"  - **作者**: {item.get('authors', '未知')[:100]}\n"
+            report += f"  - **进展**: {item.get('progress', item.get('summary', '...'))[:150]}...\n"
+            report += f"  - **文献链接**: {item.get('article_url', item.get('link', '#'))}\n"
+            report += f"  - **分享链接**: {item.get('link', '#')}\n"
+            if citation:
+                report += f"  - **引用**: *{citation}*\n"
+            
+            # 生成 200 字总结
+            summary = f"{item.get('progress', '')} {item.get('summary', '')}"
+            if len(summary) > 200:
+                summary = summary[:200] + "..."
+            report += f"  - **总结**: {summary}\n"
+            report += "\n"
     
     # 保存
     report_file = DAILY_REPORT_DIR / f"{today.strftime('%Y-%m-%d')}.md"

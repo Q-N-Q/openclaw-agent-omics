@@ -10,6 +10,10 @@ from pathlib import Path
 import sys
 import urllib.parse
 import base64
+import requests
+import subprocess
+import json
+import time
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -350,7 +354,81 @@ def extract_metadata(content, url):
     
     return meta
 
+def generate_summary_with_llm(content, meta, limit=150):
+    """使用 OpenClaw agent 命令生成深度总结"""
+    try:
+        # 准备 prompt
+        prompt = f"""请用一段话（100-150 字）总结这篇科研文章，必须包括以下 9 个要素：
+团队单位、研究骨干、研究目的、思路方法、主要工具、研究样本、主要发现、研究意义、产业应用。
+
+要求：
+- 写成一段连贯的文字，不要分条列点
+- 控制在 100-150 字
+- 语言简洁专业
+
+文章内容：
+{content[:8000]}"""
+
+        # 使用 openclaw agent 命令
+        env = os.environ.copy()
+        result = subprocess.run(
+            ["openclaw", "agent", "--to", "+15555550123", "--message", prompt, "--json"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=120,
+            env=env
+        )
+        print(f"LLM subprocess returncode: {result.returncode}")
+        print(f"LLM stdout length: {len(result.stdout) if result.stdout else 0}")
+        if result.stderr: print(f"LLM stderr: {result.stderr[:200]}")
+        
+        if result.returncode == 0:
+            try:
+                output = json.loads(result.stdout)
+                # 从结果中提取文本
+                payloads = output.get("result", {}).get("payloads", [])
+                if payloads:
+                    summary = payloads[0].get("text", "").strip()
+                    if summary and len(summary) > 20:
+                        return summary
+            except Exception as e:
+                print(f"解析输出失败：{e}")
+        
+        return ""
+    
+    except Exception as e:
+        print(f"LLM 总结异常：{e}"); import traceback; traceback.print_exc()
+        return ""
+
+
+def generate_summary_rule_based(content, meta, limit=150):
+    """基于规则提取关键信息生成总结"""
+    paragraphs = content.split("\n")
+    key_info = []
+    
+    for p in paragraphs:
+        if any(kw in p for kw in ["大学", "研究所", "实验室", "团队"]):
+            if len(p) < 100: key_info.append(p.strip()); break
+    if meta.get("authors"): key_info.append("研究骨干：" + meta["authors"][:50] + "...")
+    for p in paragraphs:
+        if any(kw in p for kw in ["旨在", "为了", "解决", "难题"]):
+            if len(p) < 100: key_info.append(p.strip()); break
+    for p in paragraphs:
+        if any(kw in p for kw in ["技术", "方法", "方案", "系统", "显微镜"]):
+            if len(p) < 100: key_info.append(p.strip()); break
+    for p in paragraphs:
+        if any(kw in p for kw in ["发现", "显示", "表明", "达到", "准确率"]):
+            if len(p) < 100: key_info.append(p.strip()); break
+    for p in paragraphs:
+        if any(kw in p for kw in ["意义", "应用", "医疗", "药物", "有望"]):
+            if len(p) < 100: key_info.append(p.strip()); break
+    
+    summary = " ".join(key_info[:5])
+    if len(summary) > limit: summary = summary[:limit-3] + "..."
+    return summary if len(summary) > 30 else ""
+
 def generate_summary(content, limit=200):
+    """简单总结（备用）"""
     text = re.sub(r"!\[[^\]]*\]\([^\)]*\)", "", content)
     text = re.sub(r"\[[^\]]*\]\([^\)]*\)", "", text)
     text = re.sub(r"^#\s+", "", text, flags=re.M)
@@ -385,7 +463,21 @@ def process(url):
     
     # 提取元数据
     meta = extract_metadata(content, url)
-    summary = generate_summary(content, 200)
+    # 生成深度总结
+    summary = ""
+    if is_res and meta.get("title"):
+        print(f"正在生成深度总结...")
+        # 优先使用 LLM
+        summary = generate_summary_with_llm(content, meta, 500)
+        
+        # 如果 LLM 失败，使用规则提取
+        if not summary:
+            print(f"LLM 总结失败，使用规则提取...")
+            summary = generate_summary_rule_based(content, meta, 150)
+    
+    # 如果都失败，使用简单总结
+    if not summary:
+        summary = generate_summary(content, 200)
     
     # 如果是研究类，获取完整引用信息
     if is_res and meta.get("title"):
