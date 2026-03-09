@@ -15,6 +15,9 @@ import hashlib
 import hmac
 import base64
 import time
+
+# Tavily API Key
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "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")
 import subprocess
 import urllib.parse
 
@@ -277,6 +280,58 @@ def format_authors(authors):
         return ", ".join(formatted[:-1]) + ", & " + formatted[-1]
     return formatted[0] if formatted else ""
 
+def extract_article_with_tavily(link):
+    """使用 tavily 提取文章完整信息"""
+    if not link or not link.startswith("http"):
+        return {}
+    
+    try:
+        env = os.environ.copy()
+        env["TAVILY_API_KEY"] = TAVILY_API_KEY
+        
+        result = subprocess.run(
+            ["node", "/root/skills/tavily-search/scripts/extract.mjs", link],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, env=env, timeout=30
+        )
+        
+        if result.returncode == 0 and result.stdout:
+            lines = result.stdout.split("\n")
+            article_info = {"title": "", "content": result.stdout, "abstract": ""}
+            
+            # 提取标题（第一个有意义的非 URL 行）
+            for line in lines:
+                line = line.strip()
+                # 跳过 URL、空行、导航等
+                if not line or line.startswith("# http") or line.startswith("*") or line.startswith("- ["):
+                    continue
+                # 找第一个长标题（不含 http，长度>20）
+                if "http" not in line and len(line) > 20 and not line.startswith("#"):
+                    article_info["title"] = line
+                    break
+                # 或者 # 开头的标题
+                if line.startswith("# ") and len(line) > 10 and "http" not in line:
+                    article_info["title"] = line.replace("#", "").strip()
+                    break
+            
+            # 提取摘要
+            abstract_lines = []
+            for i, line in enumerate(lines):
+                if "abstract" in line.lower() or "摘要" in line.lower() or "[研究机构]" in line:
+                    for j in range(i, min(i+3, len(lines))):
+                        if lines[j].strip() and not lines[j].startswith("#"):
+                            abstract_lines.append(lines[j].strip())
+                    break
+            
+            if abstract_lines:
+                article_info["abstract"] = " ".join(abstract_lines)[:500]
+            
+            return article_info
+    except Exception as e:
+        print(f"Tavily 提取失败：{e}")
+    
+    return {}
+
 def get_feishu_token():
     """获取飞书 app_access_token"""
     url = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
@@ -480,7 +535,7 @@ def generate_report():
                     citation += f" https://doi.org/{item.get('doi', '')}"
             
             report += f"- **{item.get('org', '研究机构')}**\n"
-            report += f"  - **论文标题**: [{item.get('title', 'Unknown')[:80]}]({item.get('article_url', item.get('link', '#'))})\n"
+            report += f"  - **论文标题**: [{item.get('title', 'Unknown')}]({item.get('article_url', item.get('link', '#'))})\n"
             report += f"  - **作者**: {item.get('authors', '未知')[:100]}\n"
             report += f"  - **进展**: {item.get('progress', item.get('summary', '...'))[:150]}...\n"
             report += f"  - **文献链接**: {item.get('article_url', item.get('link', '#'))}\n"
