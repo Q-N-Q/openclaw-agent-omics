@@ -12,8 +12,8 @@
 
 - 按 12 个主题顺序排列
 - 每个主题下逐项陈列论文/文献
-- **如果主题里没有内容，显示"（本期无新增内容）"**
-- 所有 12 个主题都必须呈现，不能省略
+- **如果主题里没有内容，该主题不呈现**（跳过）
+- 只展示有实际内容的主题
 
 ### 2. 每项呈现格式
 
@@ -76,6 +76,7 @@
 - ❌ 缺少最新进展描述
 - ❌ 使用期刊首页链接
 - ❌ 用户分享文章单独列出未归类
+- ❌ 空主题显示"（本期无新增内容）"（应直接跳过）
 
 ---
 
@@ -177,10 +178,12 @@ Smith, J., & Wang, L. CRISPR-based gene editing in human embryos. Nature (2025).
 ├── usershare/             # 用户分享文章归档
 │   └── YYYY-MM-DD_项目名.md
 └── code/                  # 脚本和程序
+    ├── generate_daily_report.py
     ├── generate_daily_report.sh
-    ├── process_article.sh
+    ├── process_article.py
     ├── validate_urls.py
     ├── fetch_citation.py
     ├── api_tracker.py
+    ├── README.md
     └── cron.log
 ```
