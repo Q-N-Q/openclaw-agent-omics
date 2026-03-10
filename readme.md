@@ -6,6 +6,203 @@
 
 ---
 
+## 系统架构图
+
+```mermaid
+flowchart TD
+    subgraph 数据源
+        A1[RSS 订阅源<br/>Nature/Science/Cell/arXiv]
+        A2[用户分享<br/>微信链接/DOI]
+        A3[全网搜索<br/>SearXNG/Tavily]
+    end
+    
+    subgraph 数据处理
+        B1[内容提取<br/>Tavily/curl]
+        B2[类型判断<br/>研究类/其它类]
+        B3[元数据提取<br/>标题/作者/DOI/机构]
+        B4[引用获取<br/>CrossRef/PubMed]
+        B5[URL 验证<br/>validate_urls.py]
+        B6[去重检查<br/>对比过去 10 天]
+    end
+    
+    subgraph 分类归档
+        C1[12 主题分类<br/>基因组学/脑科学等]
+        C2[用户分享归档<br/>usershare/YYYY-MM-DD_标题.md]
+        C3[日报归档<br/>daily_report/YYYY-MM-DD.md]
+    end
+    
+    subgraph 输出
+        D1[飞书推送<br/>早报消息]
+        D2[归档文件<br/>Markdown 格式]
+    end
+    
+    A1 --> B1
+    A2 --> B1
+    A3 --> B1
+    B1 --> B2
+    B2 --> B3
+    B3 --> B4
+    B4 --> B5
+    B5 --> B6
+    B6 --> C1
+    C1 --> C2
+    C1 --> C3
+    C3 --> D1
+    C2 --> D2
+    C3 --> D2
+```
+
+---
+
+## 工作流程详解
+
+### 1. RSS 订阅处理流程
+
+```mermaid
+flowchart LR
+    subgraph 抓取
+        S1[定时触发<br/>0:15 AM] --> S2[读取 RSS 源]
+        S2 --> S3[解析条目<br/>标题/摘要/链接]
+    end
+    
+    subgraph 处理
+        S3 --> S4[提取元数据]
+        S4 --> S5[搜索补充信息<br/>CrossRef/DOI]
+        S5 --> S6[验证链接有效性]
+    end
+    
+    subgraph 去重
+        S6 --> S7{对比过去<br/>10 天日报}
+        S7 -->|重复 | S8[跳过]
+        S7 -->|新颖 | S9[保留]
+    end
+    
+    subgraph 分类
+        S9 --> S10[匹配主题关键词]
+        S10 --> S11[归类到 12 主题]
+    end
+    
+    subgraph 归档
+        S11 --> S12[生成早报条目]
+        S12 --> S13[写入日报文件]
+    end
+```
+
+**RSS 源列表**：
+- Nature 系列：genomics, neuroscience, synthetic-biology 等
+- Science: current.xml
+- Cell: cell/current.rss, cell-systems/current.rss
+- arXiv: q-bio.GN, q-bio.OT
+- PLOS, BMC 等
+
+---
+
+### 2. 用户分享文章处理流程
+
+```mermaid
+flowchart TD
+    U1[接收分享链接] --> U2[Tavily 提取内容]
+    U2 --> U3{提取成功？}
+    U3 -->|否 | U4[备用方法<br/>curl + readability]
+    U3 -->|是 | U5
+    U4 --> U5{内容有效？}
+    U5 -->|否 | U6[返回错误]
+    U5 -->|是 | U7[判断文章类型]
+    
+    U7 --> U8{研究类？}
+    
+    subgraph 研究类处理
+        U8 -->|是 | R1[提取图片 URL]
+        R1 --> R2[OCR 识别图片文字]
+        R2 --> R3[搜索引用信息<br/>CrossRef/PubMed/DOI]
+        R3 --> R4[获取真实论文标题]
+        R4 --> R5[提取作者/机构/期刊]
+        R5 --> R6[验证文献链接<br/>非期刊首页]
+        R6 --> R7[生成 APA 引用]
+        R7 --> R8[200 字总结]
+    end
+    
+    subgraph 其它类处理
+        U8 -->|否 | O1[记录分享链接]
+        O1 --> O2[提取金句]
+        O2 --> O3[100 字总结]
+    end
+    
+    R8 --> U9[归类到 12 主题]
+    O3 --> U9
+    
+    U9 --> U10[生成归档文件]
+    U10 --> U11[usershare/YYYY-MM-DD_标题.md]
+    U11 --> U12[纳入日报系统]
+```
+
+**研究类判定标准**：
+- 包含实验数据、方法、结果
+- 来自学术期刊、预印本平台
+- 有明确的作者、单位、DOI
+- 关键词：abstract, DOI, methods, results, 细胞，基因，蛋白等
+
+**真实性验证**：
+| 项目 | 验证方法 |
+|------|---------|
+| 论文标题 | 从学术 API 获取，不能删减 |
+| 作者 | CrossRef/PubMed 验证 |
+| 单位组织 | 从原文或学术数据库提取 |
+| 期刊名 | Crossref/期刊官网验证 |
+| DOI | 必须能解析到论文页面 |
+| 文献链接 | validate_urls.py 验证可访问 |
+
+---
+
+### 3. 日报生成流程
+
+```mermaid
+flowchart TD
+    D1[读取当日所有条目] --> D2[按主题分组]
+    D2 --> D3{每个主题}
+    D3 --> D4{有内容？}
+    D4 -->|否 | D5[跳过该主题]
+    D4 -->|是 | D6[选取前 3 条]
+    
+    D6 --> D7[生成一句话概述<br/>约 100 字，含单位 + 进展]
+    D7 --> D8[附加超链接<br/>完整标题 + 有效全文页]
+    D8 --> D9[写入日报]
+    
+    D9 --> D10{所有主题完成？}
+    D10 -->|否 | D3
+    D10 -->|是 | D11[添加验证说明]
+    D11 --> D12[保存日报文件]
+    D12 --> D13[飞书推送]
+    D13 --> D14[归档完成]
+```
+
+**日报格式要求**：
+- 按 12 主题顺序排列
+- 空主题不呈现（直接跳过）
+- 每项：一句话概述 + 超链接（完整标题）
+- 一句话概述：约 100 字，必须含单位组织 + 最新进展
+- 超链接：必须是论文全文页，不能用期刊首页
+
+---
+
+### 4. 去重规则流程
+
+```mermaid
+flowchart TD
+    DE1[新条目] --> DE2[提取标题和 DOI]
+    DE2 --> DE3[读取过去 10 天日报]
+    DE3 --> DE4{逐条对比}
+    DE4 --> DE5{标题相似度>90%?}
+    DE5 -->|是 | DE6[标记为重复]
+    DE5 -->|否 | DE7{DOI 相同？}
+    DE7 -->|是 | DE6
+    DE7 -->|否 | DE8[标记为新颖]
+    DE6 --> DE9[跳过不报道]
+    DE8 --> DE10[纳入日报]
+```
+
+---
+
 ## 早报输出格式规范
 
 ### 1. 整体结构
@@ -51,13 +248,6 @@
 10. 生命起源与极端环境生物 (Origin of Life & Extremophiles)
 11. 脑科学 (Neuroscience)
 12. 脑健康 (Brain Health)
-
-### 4. 用户分享文章处理
-
-- **必须归类到 12 个主题之一**，不能单独列出
-- 优先查找原文 DOI 和全文链接
-- 通过论文标题、作者、期刊信息搜索原文
-- 实在找不到原文时，才使用分享链接（新闻报道、公众号文章）
 
 ---
 
@@ -263,18 +453,18 @@
 
 ```
 ~/advances/
-├── readme.md              # 本配置文件（含格式规范）
+├── readme.md              # 本配置文件（含格式规范 + 流程图）
 ├── daily_report/          # 日报归档
 │   └── YYYY-MM-DD.md      # 每日早报（完整格式）
 ├── usershare/             # 用户分享文章归档
 │   └── YYYY-MM-DD_项目名.md
 └── code/                  # 脚本和程序
-    ├── generate_daily_report.py
-    ├── generate_daily_report.sh
-    ├── process_article.py        # 文章处理（带 Tavily 提取）
-    ├── validate_urls.py          # URL 验证
-    ├── fetch_citation.py         # 引用获取
-    ├── api_tracker.py            # API 统计
+    ├── generate_daily_report.py    # 日报生成
+    ├── generate_daily_report.sh    # cron 调用
+    ├── process_article.py          # 文章处理（带 Tavily 提取）
+    ├── validate_urls.py            # URL 验证
+    ├── fetch_citation.py           # 引用获取
+    ├── api_tracker.py              # API 统计
     ├── README.md
     └── cron.log
 ```
