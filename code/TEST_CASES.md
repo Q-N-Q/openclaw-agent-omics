@@ -61,12 +61,92 @@
 
 ---
 
+### 5. Nature Neuroscience - 流式脑 - 语音神经假体
+**微信链接：** https://mp.weixin.qq.com/s/ogkFvhTFmJrREOyJt4_qxw  
+**论文标题：** A streaming brain-to-voice neuroprosthesis to restore naturalistic communication  
+**DOI：** 10.1038/s41593-025-01905-6  
+**期刊：** Nature Neuroscience  
+**年份：** 2025  
+**作者：** Kaylo T. Littlejohn, Cheol Jun Cho, Jessie R. Liu, et al.  
+**单位：** 加州大学旧金山分校 (UCSF)
+
+**处理流程：**
+1. Tavily 提取微信文章内容
+2. 原文中无学术链接
+3. 使用 Tavily 搜索找到 Nature Neuroscience 原文
+4. 提取完整引用信息
+
+**测试结果：** ✅ 成功获取真实论文标题和完整引用
+
+**核心发现：**
+- ECoG 电极阵列捕捉大脑信号
+- RNN-T 深度学习模型实时解码
+- 80 毫秒内生成自然语音
+- 失语症患者通过"想象说话"即可交流
+
+---
+
+### 6. Nature - 细胞记忆体 GEART
+**微信链接：** https://mp.weixin.qq.com/s/rptQ9f2tlLsVaG_Q6VzN-A  
+**论文标题：** Genetically encoded assembly recorder temporally resolves cellular history  
+**DOI：** 10.1038/s41586-026-10323-y  
+**期刊：** Nature  
+**年份：** 2026  
+**作者：** Yuqing Yan, Jiaxi Lu, Zhe Li, et al.  
+**单位：** 北京大学等
+
+**处理流程：**
+1. Tavily 提取微信文章内容
+2. 从原文中提取到 Nature 链接
+3. 使用 Tavily 提取 Nature 论文页面
+4. 获取完整引用信息
+
+**测试结果：** ✅ 成功获取真实论文标题和完整引用
+
+**核心发现：**
+- 基因编码组装记录器（GEART）
+- 时序记录细胞内分子组装事件
+- 可回溯生命历史
+- 解析细胞谱系和发育轨迹
+
+---
+
+### 7. Science Advances - 磁性微机器人
+**微信链接：** https://mp.weixin.qq.com/s/dSFBaqT3kR6SkdsThRy0lw  
+**论文标题：** Microfluidic-enabled modular assembly of magnetic microrobots for multimodal locomotion  
+**DOI：** 10.1126/sciadv.adw3172  
+**期刊：** Science Advances  
+**年份：** 2026  
+**作者：** 待确认  
+**单位：** 待确认
+
+**处理流程：**
+1. Tavily 提取微信文章内容
+2. 从原文中提取到 DOI 链接
+3. Tavily 提取 Science 官网失败（反爬虫）
+4. 使用 DOI 链接归档
+
+**测试结果：** ✅ 成功获取 DOI 链接，部分信息待补充
+
+**核心发现：**
+- 微流控技术制备磁性微机器人
+- 模块化组装
+- 多种运动模式（行走、爬行、飞行）
+- 应用于靶向给药、微创手术
+
+**待改进：**
+- Science 官网反爬虫，需要备用提取方案
+- 作者和单位信息需通过其他方式获取
+
+---
+
 ## 功能测试清单
 
 ### 内容提取
 - [x] tavily 内容提取
 - [x] 备用方法（curl + readability）
 - [x] 微信文章处理
+- [ ] Science 官网提取（反爬虫，需改进）
 
 ### 链接发现
 - [x] Markdown 格式链接提取 `[text](url)`
@@ -76,6 +156,7 @@
 - [x] DOI 提取 `10.xxxx/xxxxx`
 - [x] 期刊官网链接提取（nature.com, science.org, cell.com）
 - [x] SearXNG 二次搜索
+- [x] Tavily 搜索补充
 
 ### 图片处理
 - [x] 图片 URL 提取
@@ -87,6 +168,7 @@
 - [x] CrossRef API 搜索
 - [x] PubMed API 搜索
 - [x] searxng 搜索
+- [x] Tavily 搜索
 - [x] APA/Nature 引用格式生成
 - [x] DOI 链接包含
 - [x] 真实论文标题优先（学术 API）
@@ -113,31 +195,39 @@
 - [ ] 提取 HTML 格式链接
 - [ ] 提取纯文本 arXiv/DOI 链接
 - [ ] 提取期刊官网链接
-- [ ] 如果没找到学术链接，使用 SearXNG 搜索标题
+- [ ] 如果没找到学术链接，使用 Tavily/SearXNG 搜索标题
 
 ### 第 3 步：图片处理（如果第 2 步没找到）
 - [ ] 提取图片 URL
 - [ ] 对图片进行 OCR 识别
-- [ ] 从 OCR 结果中提取 DOI 或论文标题
+- [ ] 从 OCR 结果中提取 DOI（正则：`10\.\d{4,}/[\w\-\.]+`）
+- [ ] 从 OCR 结果中提取论文标题（长文本行）
 - [ ] 使用提取的信息搜索引用
 
 ### 第 4 步：验证与获取
 - [ ] 验证文献链接可访问性（非期刊首页）
-- [ ] 获取完整引用信息（CrossRef/PubMed）
+- [ ] 获取完整引用信息（CrossRef/PubMed/Tavily）
 - [ ] 生成 APA/Nature 格式引用
 
 ### 第 5 步：归档
 - [ ] 判断文章类型（研究类/其它类）
 - [ ] 归类到 12 个主题
 - [ ] 生成归档文件（usershare/YYYY-MM-DD_标题.md）
-- [ ] 研究类：200 字总结
+- [ ] 研究类：200 字总结 + 完整引用
 - [ ] 其它类：100 字总结 + 金句
 
 ---
 
 ## 修改记录
 
-### 2026-03-10
+### 2026-03-10 12:48
+1. 添加 Nature Neuroscience 脑 - 语音神经假体测试用例（案例 5）
+2. 添加 Nature 细胞记忆体 GEART 测试用例（案例 6）
+3. 添加 Science Advances 磁性微机器人测试用例（案例 7）
+4. 更新功能测试清单（添加 Tavily 搜索）
+5. 标注 Science 官网反爬虫问题
+
+### 2026-03-10 12:14
 1. 添加 LabOS 问题诊断案例
 2. 扩展链接提取（纯文本 arXiv/DOI）
 3. 添加 SearXNG 二次搜索
@@ -154,4 +244,4 @@
 
 ---
 
-**最后更新：** 2026-03-10 12:14
+**最后更新：** 2026-03-10 12:48
