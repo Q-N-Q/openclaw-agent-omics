@@ -468,3 +468,102 @@ flowchart TD
     ├── README.md
     └── cron.log
 ```
+
+---
+
+## 问题诊断与改进
+
+### 案例：为什么一开始没有在原文中找到 arXiv 链接？
+
+#### ❌ 问题分析
+
+**2026-03-10 实际案例**：用户分享微信公众号文章，内含 arXiv 论文链接，但系统一开始没有找到。
+
+**根本原因**：
+
+1. **Tavily 提取内容不完整**
+   - 微信公众号文章被反爬虫机制拦截
+   - Tavily 返回的 `raw_content` 中很多图片链接是空的 `![]()`
+   - arXiv 链接可能以纯文本形式存在，而非 markdown 格式
+
+2. **链接提取正则覆盖不全**
+   - 只提取了 markdown 格式 `[text](url)`
+   - 没有提取纯文本 URL（如 `arxiv.org/abs/2510.14861`）
+   - 没有提取 HTML 格式 `<a href="...">`
+
+3. **没有二次搜索机制**
+   - 当原文提取失败时，没有用 SearXNG 搜索补充
+   - 错失了通过标题搜索找到原始论文的机会
+
+#### ✅ 改进措施
+
+**代码更新（process_article.py）**：
+
+```python
+def extract_all_links(content):
+    """从内容中提取所有可能的链接"""
+    links = set()
+    
+    # 1. Markdown 格式：[text](url)
+    md_links = re.findall(r'\[([^\]]*)\]\((https?://[^\s\)]+)\)', content)
+    
+    # 2. HTML 格式：<a href="url">text</a>
+    html_links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', content, re.I)
+    
+    # 3. 纯文本 URL（特别是 arXiv、DOI）
+    arxiv_urls = re.findall(r'(https?://arxiv\.org/[^\s<>"\']+)', content)
+    arxiv_ids = re.findall(r'arXiv[:\s]+(\d+\.\d+)', content, re.I)
+    dois = re.findall(r'10\.\d{4,}/[\w\-\.]+', content)
+    
+    # 4. 期刊官网链接
+    journal_urls = re.findall(r'(https?://(?:www\.)?(?:nature|science|cell|pnas|plos)\.com/[^\s<>"\']+)', content)
+    
+    return list(links)
+
+def search_links_by_searxng(title, max_results=5):
+    """当原文中没有找到链接时，使用 SearXNG 搜索补充"""
+    query = f"{title} arxiv OR doi OR paper site:arxiv.org OR site:doi.org"
+    # ... 搜索逻辑
+```
+
+**流程改进**：
+
+```mermaid
+flowchart TD
+    A[Tavily 提取内容] --> B{提取成功？}
+    B -->|否 | C[备用方法 curl]
+    B -->|是 | D[提取所有链接]
+    C --> D
+    D --> E{找到学术链接？}
+    E -->|否 | F[SearXNG 搜索标题]
+    E -->|是 | G[验证链接有效性]
+    F --> G
+    G --> H[获取引用信息]
+```
+
+#### 📋 检查清单
+
+**处理用户分享文章时，必须执行**：
+
+- [ ] Tavily 提取内容
+- [ ] 提取所有格式链接（markdown、HTML、纯文本）
+- [ ] 特别关注 arXiv、DOI、期刊官网链接
+- [ ] 如果没找到，用 SearXNG 搜索标题
+- [ ] 验证文献链接可访问性
+- [ ] 获取完整引用信息（CrossRef/PubMed）
+- [ ] 生成 APA/Nature 格式引用
+- [ ] 归类到 12 个主题
+
+**链接提取优先级**：
+
+1. 原文中的 arXiv/DOI 链接（最高优先级）
+2. 期刊官网全文页链接
+3. SearXNG 搜索找到的链接
+4. 分享链接本身（最后备选）
+
+#### 🎯 关键教训
+
+1. **不要依赖单一提取源** - Tavily 可能失败，需要备用方案
+2. **正则表达式要全面** - 覆盖 markdown、HTML、纯文本格式
+3. **搜索是最后的保障** - 当提取失败时，用标题搜索补充
+4. **验证是关键** - 所有链接必须验证可访问性

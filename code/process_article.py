@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""用户分享文章处理器 - 增强版（带 Tavily 提取、OCR、URL 验证）"""
+"""用户分享文章处理器 - 增强版（带 Tavily 提取、OCR、URL 验证、链接发现）"""
 
 import json
 import re
@@ -63,10 +63,85 @@ def extract_with_fallback(url):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=10
         )
         if result.returncode == 0:
-            return result.stdout[:50000]  # 限制长度
+            return result.stdout[:50000]
     except:
         pass
     return None
+
+def extract_all_links(content):
+    """
+    从内容中提取所有可能的链接
+    
+    问题诊断：
+    1. Tavily 提取的内容可能不完整，链接可能以多种格式存在
+    2. 需要同时提取 markdown 格式、HTML 格式、纯文本格式的链接
+    3. 特别关注 arXiv、DOI、期刊官网链接
+    """
+    links = set()
+    
+    # 1. Markdown 格式：[text](url)
+    md_links = re.findall(r'\[([^\]]*)\]\((https?://[^\s\)]+)\)', content)
+    for text, url in md_links:
+        links.add((text.strip(), url))
+    
+    # 2. HTML 格式：<a href="url">text</a>
+    html_links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', content, re.I)
+    for url, text in html_links:
+        links.add((text.strip(), url))
+    
+    # 3. 纯文本 URL（特别是 arXiv、DOI）
+    # arXiv 格式：arxiv.org/abs/xxx 或 https://arxiv.org/abs/xxx
+    arxiv_urls = re.findall(r'(https?://arxiv\.org/[^\s<>"\']+)', content)
+    for url in arxiv_urls:
+        links.add(("arXiv", url))
+    
+    # 纯文本 arXiv ID：arXiv:2510.14861
+    arxiv_ids = re.findall(r'arXiv[:\s]+(\d+\.\d+)', content, re.I)
+    for arxiv_id in arxiv_ids:
+        links.add(("arXiv", f"https://arxiv.org/abs/{arxiv_id}"))
+    
+    # DOI 格式
+    dois = re.findall(r'10\.\d{4,}/[\w\-\.]+', content)
+    for doi in dois:
+        links.add(("DOI", f"https://doi.org/{doi}"))
+    
+    # 4. 期刊官网链接（nature.com, science.org, cell.com 等）
+    journal_urls = re.findall(r'(https?://(?:www\.)?(?:nature|science|cell|pnas|pnas|plos|biomedcentral)\.com/[^\s<>"\']+)', content)
+    for url in journal_urls:
+        links.add(("Journal", url))
+    
+    # 5. 图片中的线索（后续 OCR 处理）
+    image_urls = re.findall(r'!\[([^\]]*)\]\((https?://[^\s\)]+)\)', content)
+    
+    print(f"  找到 {len(links)} 个链接")
+    return list(links), [url for _, url in image_urls]
+
+def search_links_by_searxng(title, max_results=5):
+    """
+    当原文中没有找到链接时，使用 SearXNG 搜索补充
+    
+    问题诊断：
+    Tavily 提取可能遗漏链接，需要用标题搜索来发现原始论文
+    """
+    print(f"  使用 SearXNG 搜索：{title[:50]}...")
+    try:
+        query = f"{title} arxiv OR doi OR paper site:arxiv.org OR site:doi.org OR site:nature.com OR site:science.org OR site:cell.com"
+        search_url = f"{SEARXNG_URL}/search?q={urllib.parse.quote(query)}&format=json"
+        result = subprocess.run(["curl", "-s", search_url], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=10)
+        
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            links = []
+            for r in data.get("results", [])[:max_results]:
+                url = r.get("url", "")
+                title_found = r.get("title", "")
+                # 优先学术链接
+                if any(domain in url for domain in ["arxiv.org", "doi.org", "nature.com", "science.org", "cell.com", "pubmed"]):
+                    links.append((title_found, url))
+            return links
+    except Exception as e:
+        print(f"  SearXNG 搜索失败：{e}")
+    return []
 
 def extract_image_urls(content):
     """从内容中提取图片 URL"""
@@ -104,13 +179,11 @@ def is_research(content, url=""):
     """判断是否是研究类文章"""
     score = 0
     
-    # 域名加分
     academic = ["nature.com", "science.org", "cell.com", "arxiv.org", "pubmed", "doi.org", "ncbi.nlm.nih.gov"]
     for d in academic:
         if d in url.lower():
             score += 3
     
-    # 关键词加分
     research_words = ["abstract", "doi", "methods", "results", "figure", "supplementary", 
                       "摘要", "方法", "结果", "图", "补充", "细胞", "基因", "蛋白", "受体", "研究", "论文", "阅读来自"]
     content_lower = content.lower()
@@ -118,7 +191,6 @@ def is_research(content, url=""):
         if w in content_lower:
             score += 1
     
-    # DOI 加分
     doi_pattern = r"10\.\d{4,}/[\w\-\.]+"
     if re.search(doi_pattern, content):
         score += 5
@@ -132,7 +204,6 @@ def validate_article_url(url):
         result = is_valid_url(url, timeout=10)
         return result["valid"], result.get("title", ""), result.get("error", "")
     except:
-        # 简单验证
         try:
             result = subprocess.run(
                 ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-A", "Mozilla/5.0", url],
@@ -161,12 +232,10 @@ def search_citation_with_image_hints(content, image_urls):
     for img_url in image_urls[:2]:
         ocr_text = ocr_image_with_tesseract(img_url)
         if ocr_text:
-            # 从 OCR 结果中提取 DOI 或标题
             doi_match = re.search(r"10\.\d{4,}/[\w\-\.]+", ocr_text)
             if doi_match:
                 return fetch_citation_info("", doi_match.group())
             
-            # 提取标题关键词
             lines = [l for l in ocr_text.split("\n") if len(l) > 20 and len(l) < 200]
             if lines:
                 return fetch_citation_info(lines[0])
@@ -183,10 +252,8 @@ def search_article_url_searxng(title, doi="", journal=""):
             data = json.loads(result.stdout)
             for r in data.get("results", [])[:5]:
                 url = r.get("url", "")
-                # 排除首页、搜索页
                 if any(p in url for p in ["/search", "/journal/", "/browse/"]):
                     continue
-                # 优先选择 DOI 链接或期刊全文页
                 if "doi.org" in url or "nature.com/articles" in url or "science.org/doi" in url:
                     return url
     except Exception as e:
@@ -200,7 +267,7 @@ def classify_topic(title, content=""):
         for kw in keywords:
             if kw.lower() in text:
                 return topic
-    return "基因组学"  # 默认
+    return "基因组学"
 
 def extract_metadata(content, url=""):
     """提取元数据"""
@@ -219,17 +286,14 @@ def extract_metadata(content, url=""):
         "application": ""
     }
     
-    # 提取 DOI
     doi_match = re.search(r"10\.\d{4,}/[\w\-\.]+", content)
     if doi_match:
         meta["doi"] = doi_match.group()
     
-    # 提取标题（从 markdown 或 HTML）
     title_match = re.search(r"^#\s+(.+)$", content, re.M)
     if title_match:
         meta["title"] = title_match.group(1).strip()
     
-    # 提取机构关键词
     org_keywords = ["大学", "研究所", "学院", "University", "Institute", "Laboratory", "医院"]
     for line in content.split("\n"):
         if any(kw in line for kw in org_keywords) and len(line) < 200:
@@ -241,7 +305,6 @@ def extract_metadata(content, url=""):
 def generate_summary_with_llm(content, meta, limit=200):
     """使用 LLM 生成总结"""
     try:
-        # 简化版：提取关键句
         paragraphs = [p.strip() for p in content.split("\n\n") if len(p) > 50 and len(p) < 500]
         
         key_info = []
@@ -275,7 +338,15 @@ def generate_apa_citation(authors, title, journal, year, doi):
     return citation
 
 def process(url):
-    """处理用户分享文章"""
+    """
+    处理用户分享文章
+    
+    关键改进：
+    1. 提取所有格式的链接（markdown、HTML、纯文本）
+    2. 特别关注 arXiv、DOI、期刊官网链接
+    3. 如果原文中没有找到，使用 SearXNG 搜索补充
+    4. 验证所有文献链接的有效性
+    """
     print(f"处理：{url}")
     
     # 1. 提取内容
@@ -290,32 +361,71 @@ def process(url):
     is_res = is_research(content, url)
     print(f"文章类型：{'研究类' if is_res else '其它类'}")
     
-    # 3. 提取图片
-    image_urls = extract_image_urls(content)
+    # 3. 提取所有链接（关键改进步骤）
+    print("正在提取链接...")
+    links, image_urls = extract_all_links(content)
+    
+    # 4. 筛选学术链接
+    academic_links = []
+    for text, link_url in links:
+        if any(domain in link_url for domain in ["arxiv.org", "doi.org", "nature.com", "science.org", "cell.com", "pubmed"]):
+            academic_links.append((text, link_url))
+            print(f"  找到学术链接：{link_url}")
+    
+    # 5. 如果没有找到学术链接，使用 SearXNG 搜索
+    if not academic_links:
+        print("  原文中未找到学术链接，使用 SearXNG 搜索...")
+        # 提取标题
+        title_match = re.search(r"#\s+(.+)", content)
+        if title_match:
+            title = title_match.group(1)[:200]
+            search_results = search_links_by_searxng(title)
+            for text, link_url in search_results:
+                academic_links.append((text, link_url))
+                print(f"  搜索找到：{link_url}")
+    
     citation_info = {}
     
-    # 4. 研究类文章处理
+    # 6. 研究类文章处理
+    if is_res and academic_links:
+        # 使用找到的第一个学术链接
+        _, article_url = academic_links[0]
+        citation_info = fetch_citation_info("", article_url.split("/")[-1] if "doi.org" in article_url else "")
+    
     if is_res and image_urls:
         print(f"发现 {len(image_urls)} 张图片，尝试从图片中获取线索...")
         citation_info = search_citation_with_image_hints(content, image_urls)
     
-    # 5. 提取元数据
+    # 7. 提取元数据
     meta = extract_metadata(content, url)
     
-    # 6. 生成总结
+    # 8. 如果有学术链接，更新元数据
+    if academic_links:
+        for text, link_url in academic_links:
+            if "arxiv.org" in link_url:
+                arxiv_id = link_url.split("/")[-1]
+                meta["doi"] = f"arXiv:{arxiv_id}"
+                meta["article_url"] = link_url
+                meta["journal"] = "arXiv"
+                break
+            elif "doi.org" in link_url:
+                meta["article_url"] = link_url
+                meta["doi"] = link_url.split("/")[-1]
+                break
+    
+    # 9. 生成总结
     summary = ""
     if is_res and meta.get("title"):
         print(f"正在生成深度总结...")
         summary = generate_summary_with_llm(content, meta, 200)
     
     if not summary:
-        # 简单总结
         text = re.sub(r"!\[[^\]]*\]\([^\)]*\)", "", content)
         text = re.sub(r"\[[^\]]*\]\([^\)]*\)", "", text)
         text = re.sub(r"\s+", " ", text).strip()
         summary = text[:200] + "..." if len(text) > 200 else text
     
-    # 7. 获取完整引用信息（研究类）
+    # 10. 获取完整引用信息（研究类）
     if is_res and meta.get("title"):
         print(f"正在获取引用信息...")
         
@@ -346,7 +456,7 @@ def process(url):
             if citation_info.get("URL"):
                 meta["article_url"] = citation_info["URL"]
         
-        # 8. 搜索并验证文章页面链接
+        # 11. 搜索并验证文章页面链接
         if not meta.get("article_url"):
             print(f"正在搜索文章页面链接...")
             article_url = ""
@@ -355,7 +465,6 @@ def process(url):
                 article_url = search_article_url_searxng(meta["title"], meta["doi"], meta.get("journal", ""))
             
             if article_url:
-                # 验证链接
                 valid, title, error = validate_article_url(article_url)
                 if valid:
                     meta["article_url"] = article_url
@@ -366,11 +475,11 @@ def process(url):
             elif meta.get("doi"):
                 meta["article_url"] = f"https://doi.org/{meta['doi']}"
     
-    # 9. 归类到主题
+    # 12. 归类到主题
     topic = classify_topic(meta.get("title", ""), content)
     print(f"归类到主题：{topic}")
     
-    # 10. 生成归档文件
+    # 13. 生成归档文件
     today = datetime.now().strftime("%Y-%m-%d")
     safe_title = re.sub(r"[^\w\u4e00-\u9fff]", "_", meta.get("title", "unknown")[:30])
     archive = USER_SHARE_DIR / f"{today}_{safe_title}.md"
@@ -438,7 +547,7 @@ def process(url):
         "citation": meta.get("citation", ""),
         "authors": meta.get("authors", ""),
         "topic": topic,
-        "images_processed": len(image_urls),
+        "links_found": len(academic_links),
         "archive": str(archive)
     }
 
