@@ -4,20 +4,80 @@
 
 本系统自动抓取生命科学领域最新进展，每日凌晨 0:15 生成早报并归档。
 
-## 12 个主题分类
+---
 
-1. **基因组学** (Genomics)
-2. **临床检测** (Clinical Diagnostics)
-3. **细胞组学** (Cell Omics)
-4. **时空组学** (Spatiotemporal Omics)
-5. **合成生物学** (Synthetic Biology)
-6. **生命科学大模型** (Life Science AI/LLM)
-7. **细胞治疗** (Cell Therapy)
-8. **类器官** (Organoids)
-9. **衰老与发育** (Aging & Development)
-10. **生命起源与极端环境生物** (Origin of Life & Extremophiles)
-11. **脑科学** (Neuroscience)
-12. **脑健康** (Brain Health)
+## 早报输出格式规范
+
+### 1. 整体结构
+
+- 按 12 个主题顺序排列
+- 每个主题下逐项陈列论文/文献
+- **如果主题里没有内容，显示"（本期无新增内容）"**
+- 所有 12 个主题都必须呈现，不能省略
+
+### 2. 每项呈现格式
+
+```
+一句话概述（约 100 字，必须包括单位组织、最新进展描述），中文。如果找不到进展，就用完整标题的翻译
+[不删减的真实论文标题](经过验证的有效文献网页链接)
+```
+
+**一句话陈述要求**：
+- 约 100 字
+- **必须包括**：单位组织（研究机构/大学/公司）
+- **必须包括**：最新进展描述（发表了什么、发现了什么、突破了什么）
+- 中文撰写
+- 如果找不到具体进展，使用完整标题的中文翻译
+
+**超链接要求**：
+- 链接文字：**不删减的真实论文标题**（英文原文）
+- 链接地址：**经过访问校对过的有效文献网页**
+- **必须是**：论文全文页、新闻报道页等实际文章内容
+- **禁止使用**：期刊首页、搜索页、作者主页
+- 验证方法：用 `web_fetch` 或 `extract_content_from_websites` 确认可访问
+- 用户分享的文章：优先找原文 DOI/全文链接，实在找不到才用分享链接（新闻报道）
+
+### 3. 主题分类（12 个）
+
+1. 基因组学 (Genomics)
+2. 临床检测 (Clinical Diagnostics)
+3. 细胞组学 (Cell Omics)
+4. 时空组学 (Spatiotemporal Omics)
+5. 合成生物学 (Synthetic Biology)
+6. 生命科学大模型 (Life Science AI/LLM)
+7. 细胞治疗 (Cell Therapy)
+8. 类器官 (Organoids)
+9. 衰老与发育 (Aging & Development)
+10. 生命起源与极端环境生物 (Origin of Life & Extremophiles)
+11. 脑科学 (Neuroscience)
+12. 脑健康 (Brain Health)
+
+### 4. 用户分享文章处理
+
+- **必须归类到 12 个主题之一**，不能单独列出
+- 优先查找原文 DOI 和全文链接
+- 通过论文标题、作者、期刊信息搜索原文
+- 实在找不到原文时，才使用分享链接（新闻报道、公众号文章）
+
+### 5. 示例
+
+**正确格式**：
+```
+## 基因组学
+
+药理学基因组变异预测工具评估研究，为精神疾病精准医疗提供技术支持。英国研究团队在《The Pharmacogenomics Journal》发表论文，评估了计算变异预测工具在药物基因组学中的应用，重点关注抗抑郁药不良反应的单倍型评估方法，可提升临床用药安全性。
+[Computational variant predictors for pharmacogenomics: from evaluation of single alleles to assessment of adverse drug reactions to antidepressants](https://www.nature.com/articles/s41397-026-00399-0)
+```
+
+**错误格式（避免）**：
+- ❌ 使用 markdown 表格
+- ❌ 链接文字被删减（如"查看论文"）
+- ❌ 缺少单位组织信息
+- ❌ 缺少最新进展描述
+- ❌ 使用期刊首页链接
+- ❌ 用户分享文章单独列出未归类
+
+---
 
 ## RSS 信息源
 
@@ -111,9 +171,9 @@ Smith, J., & Wang, L. CRISPR-based gene editing in human embryos. Nature (2025).
 
 ```
 ~/advances/
-├── readme.md              # 本配置文件
+├── readme.md              # 本配置文件（含格式规范）
 ├── daily_report/          # 日报归档
-│   └── YYYY-MM-DD.md
+│   └── YYYY-MM-DD.md      # 每日早报（完整格式）
 ├── usershare/             # 用户分享文章归档
 │   └── YYYY-MM-DD_项目名.md
 └── code/                  # 脚本和程序
